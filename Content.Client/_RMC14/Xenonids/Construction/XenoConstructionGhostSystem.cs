@@ -222,8 +222,13 @@ public sealed class XenoConstructionGhostSystem : EntitySystem
             if (construction.BuildChoice == null)
                 return;
 
-            if (!_xenoConstruction.CanSecreteOnTilePopup((player, construction), construction.BuildChoice, coords, true, true, false))
+            // Allow the server to turn an otherwise valid out-of-range click into a designation.
+            // The server still decides whether to build directly, place a mark, or reject the target.
+            if (!_xenoConstruction.CanSecreteOnTilePopup((player, construction), construction.BuildChoice, coords, true, true, false) &&
+                !_xenoConstruction.CanSecreteOnTilePopup((player, construction), construction.BuildChoice, coords, true, true, false, false))
+            {
                 return;
+            }
         }
 
         var actionController = _uiManager.GetUIController<ActionUIController>();
