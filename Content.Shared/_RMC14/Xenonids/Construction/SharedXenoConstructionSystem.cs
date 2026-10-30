@@ -664,7 +664,7 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
                 return;
             }
 
-            if (!CanSecreteOnTilePopup(xeno, choice, snappedTarget, true, true, false, false))
+            if (!CanSecreteOnTilePopup(xeno, choice, snappedTarget, true, true, false, false, checkSupport: false))
                 return;
 
             args.Handled = true;
@@ -1546,7 +1546,7 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
         return true;
     }
 
-    public bool CanSecreteOnTilePopup(Entity<XenoConstructionComponent> xeno, EntProtoId? buildChoice, EntityCoordinates target, bool checkStructureSelected, bool checkWeeds, bool popup = true, bool checkRange = true)
+    public bool CanSecreteOnTilePopup(Entity<XenoConstructionComponent> xeno, EntProtoId? buildChoice, EntityCoordinates target, bool checkStructureSelected, bool checkWeeds, bool popup = true, bool checkRange = true, bool checkSupport = true)
     {
         if (HasComp<VehicleInteriorOccupantComponent>(xeno.Owner))
         {
@@ -1675,7 +1675,8 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
         if (checkStructureSelected &&
             buildChoice is { } choice)
         {
-            if (_prototype.TryIndex(choice, out var choiceProto) &&
+            if (checkSupport &&
+                _prototype.TryIndex(choice, out var choiceProto) &&
                 choiceProto.HasComponent<XenoConstructionRequiresSupportComponent>(_compFactory))
             {
                 if (!IsSupported((gridId, grid), target))
