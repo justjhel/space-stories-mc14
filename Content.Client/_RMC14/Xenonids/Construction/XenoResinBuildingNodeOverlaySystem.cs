@@ -41,14 +41,14 @@ public sealed class XenoResinBuildingNodeOverlaySystem : EntitySystem
                         : "DesignNodeMarkConstructWall";
                     overlay = Spawn(mark, coordinates);
                     _overlays[nodeUid] = overlay;
-
-                    if (node.QueenQueue && TryComp(overlay, out SpriteComponent? sprite))
-                        sprite.Color = new Color(255, 215, 0, 255);
                 }
                 else if (TryComp(overlay, out TransformComponent? overlayTransform))
                 {
                     _transform.SetCoordinates(overlay, overlayTransform, coordinates);
                 }
+
+                if (TryComp(overlay, out SpriteComponent? sprite))
+                    sprite.Color = node.QueenQueue ? new Color(255, 215, 0, 255) : Color.White;
             }
         }
 
