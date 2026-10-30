@@ -651,6 +651,16 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
             choice = existingNode.StructureId;
         }
 
+        else if (!outOfRange && !alreadyBuilding &&
+                 existingNodeUid != null &&
+                 existingNode?.Owner != xeno.Owner)
+        {
+            // Do not let a direct build consume another builder's private designation.
+            args.Handled = true;
+            _popup.PopupClient(Loc.GetString("rmc-xeno-construction-blocked-structure"), snappedTarget, xeno, PopupType.SmallCaution);
+            return;
+        }
+
         if (outOfRange || alreadyBuilding)
         {
             // Re-targeting one of our marks cancels it even if the tile has since become blocked.
