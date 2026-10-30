@@ -673,9 +673,25 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
         if (args.Handled || args.Cancelled)
             return;
 
+        var queenQueueDesignation = false;
+        using (var designatedNodes = _rmcMap.GetAnchoredEntitiesEnumerator<XenoResinBuildingNodeComponent>(coordinates))
+        {
+            while (designatedNodes.MoveNext(out var nodeUid))
+            {
+                if (TryComp(nodeUid, out XenoResinBuildingNodeComponent? node) &&
+                    node.Owner == xeno.Owner &&
+                    node.QueenQueue &&
+                    HasComp<XenoAttachedOvipositorComponent>(xeno.Owner))
+                {
+                    queenQueueDesignation = true;
+                    break;
+                }
+            }
+        }
+
         if (!coordinates.IsValid(EntityManager) ||
             !xeno.Comp.CanBuild.Contains(args.StructureId) ||
-            !CanSecreteOnTilePopup(xeno, args.StructureId, GetCoordinates(args.Coordinates), true, true))
+            !CanSecreteOnTilePopup(xeno, args.StructureId, coordinates, true, true, true, !queenQueueDesignation))
         {
             return;
         }
@@ -1990,10 +2006,10 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
     {
         // Resin designations are processed only when their planter is able to build them.
         // This keeps the normal construction validation, plasma cost and do-after path in use.
-        var nodeQuery = EntityQueryEnumerator<XenoResinBuildingNodeComponent, TransformComponent>();
-        while (nodeQuery.MoveNext(out var nodeUid, out var node, out var nodeXform))
+        var nodeQuery = EntityQueryEnumerator<XenoResinBuildingNodeComponent>();
+        while (nodeQuery.MoveNext(out var nodeUid, out var node))
         {
-            if (node.Building)
+            if (node.Building || EntityManager.IsQueuedForDeletion(nodeUid))
                 continue;
 
             if (node.Owner is not { } owner ||
@@ -2008,7 +2024,7 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
             if (!construction.CanBuild.Contains(node.StructureId) || IsXenoBuilding(owner))
                 continue;
 
-            var target = _transform.GetCoordinates(nodeUid);
+            var target = Transform(nodeUid).Coordinates;
             var queenQueue = node.QueenQueue && HasComp<XenoAttachedOvipositorComponent>(owner);
             if (queenQueue &&
                 _queenEye.IsInQueenEye(owner) &&
