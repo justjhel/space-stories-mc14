@@ -467,6 +467,15 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
         };
     }
 
+    private bool IsXenoBuilding(EntityUid xeno)
+    {
+        if (!TryComp(xeno, out DoAfterComponent? doAfter))
+            return false;
+
+        return doAfter.DoAfters.Values.Any(activeDoAfter =>
+            activeDoAfter.Args.Event is XenoSecreteStructureDoAfterEvent or XenoOrderConstructionDoAfterEvent);
+    }
+
     private void HandleSecreteResinPlacement(Entity<XenoConstructionComponent> xeno, ref XenoSecreteStructureActionEvent args)
     {
         var snapped = args.Target.SnapToGrid(EntityManager, _map);
@@ -541,8 +550,9 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
         var outOfRange = rangeEv.Range > 0 &&
                          !_queenEye.IsInQueenEye(xeno.Owner) &&
                          !_transform.InRange(_transform.GetMoverCoordinates(xeno.Owner), snappedTarget, rangeEv.Range.Float());
+        var alreadyBuilding = IsXenoBuilding(xeno.Owner);
 
-        if (outOfRange)
+        if (outOfRange || alreadyBuilding)
         {
             if (!CanSecreteOnTilePopup(xeno, choice, snappedTarget, true, true, false, false))
                 return;
@@ -558,19 +568,24 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
                     continue;
 
                 if (existing.Owner != xeno.Owner)
-                    continue;
+                {
+                    _popup.PopupClient(Loc.GetString("rmc-xeno-construction-blocked-structure"), snappedTarget, xeno, PopupType.SmallCaution);
+                    return;
+                }
 
                 QueueDel(existingUid);
                 _audio.PlayPredicted(xeno.Comp.BuildSound, snappedTarget, xeno.Owner);
                 return;
             }
 
-            var nodeUid = Spawn("XenoResinBuildingNode", snappedTarget);
+            var queenQueue = HasComp<XenoAttachedOvipositorComponent>(xeno.Owner);
+            var nodePrototype = queenQueue ? "XenoResinBuildingQueenQueueNode" : "XenoResinBuildingNode";
+            var nodeUid = Spawn(nodePrototype, snappedTarget);
             if (TryComp(nodeUid, out XenoResinBuildingNodeComponent? node))
             {
                 node.Owner = xeno.Owner;
                 node.StructureId = choice;
-                node.QueenQueue = false;
+                node.QueenQueue = queenQueue;
                 Dirty(nodeUid, node);
             }
 
@@ -1990,11 +2005,19 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
                 continue;
             }
 
-            if (!construction.CanBuild.Contains(node.StructureId))
+            if (!construction.CanBuild.Contains(node.StructureId) || IsXenoBuilding(owner))
                 continue;
 
             var target = _transform.GetCoordinates(nodeUid);
-            if (!CanSecreteOnTilePopup((owner, construction), node.StructureId, target, true, true, false))
+            var queenQueue = node.QueenQueue && HasComp<XenoAttachedOvipositorComponent>(owner);
+            if (queenQueue &&
+                _queenEye.IsInQueenEye(owner) &&
+                !_queenEye.CanSeeTarget(owner, target))
+            {
+                continue;
+            }
+
+            if (!CanSecreteOnTilePopup((owner, construction), node.StructureId, target, true, true, false, !queenQueue))
                 continue;
 
             var buildMult = GetBuildSpeed(node.StructureId) ?? 1f;
