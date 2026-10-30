@@ -151,7 +151,6 @@ public sealed class XenoConstructionGhostSystem : EntitySystem
 
         if (isMouseDown &&
             isConstructionActive &&
-            !string.IsNullOrEmpty(buildChoice) &&
             TryComp(player.Value, out XenoConstructionComponent? construction) &&
             !construction.OrderConstructionTargeting)
         {
@@ -219,14 +218,16 @@ public sealed class XenoConstructionGhostSystem : EntitySystem
         }
         else
         {
-            if (construction.BuildChoice == null)
+            // Owned marks remain targetable even if no structure is selected or the tile has become
+            // blocked, so they can always be cancelled. Other clicks require a selected structure.
+            var hasOwnDesignation = _xenoConstruction.HasOwnResinDesignation(player, coords);
+            if (construction.BuildChoice == null && !hasOwnDesignation)
                 return;
 
-            // Owned marks remain targetable even if the tile has become blocked, so they can be cancelled.
             // Otherwise allow the server to turn an otherwise valid out-of-range click into a designation.
-            if (!_xenoConstruction.HasOwnResinDesignation(player, coords) &&
+            if (!hasOwnDesignation &&
                 !_xenoConstruction.CanSecreteOnTilePopup((player, construction), construction.BuildChoice, coords, true, true, false) &&
-                !_xenoConstruction.CanSecreteOnTilePopup((player, construction), construction.BuildChoice, coords, true, true, false, false))
+                !_xenoConstruction.CanSecreteOnTilePopup((player, construction), construction.BuildChoice, coords, true, true, false, false, checkSupport: false))
             {
                 return;
             }
