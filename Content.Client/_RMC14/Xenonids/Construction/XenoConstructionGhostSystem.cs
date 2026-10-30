@@ -464,7 +464,18 @@ public sealed class XenoConstructionGhostSystem : EntitySystem
 
             if (construction.BuildChoice != null)
             {
-                return _xenoConstruction.CanSecreteOnTilePopup((player, construction), construction.BuildChoice, coords, true, true, false);
+                if (_xenoConstruction.CanSecreteOnTilePopup((player, construction), construction.BuildChoice, coords, true, true, false))
+                    return true;
+
+                var rangeEv = new XenoConstructionRangeEvent(construction.BuildRange);
+                RaiseLocalEvent(player, ref rangeEv);
+                var snapped = coords.SnapToGrid(EntityManager, _mapManager);
+                var outOfRange = rangeEv.Range > 0 &&
+                                 !_queenEye.IsInQueenEye(player) &&
+                                 !_transform.InRange(_transform.GetMoverCoordinates(player), snapped, rangeEv.Range.Float());
+
+                return outOfRange &&
+                       _xenoConstruction.CanSecreteOnTilePopup((player, construction), construction.BuildChoice, coords, true, true, false, false);
             }
 
             return false;
