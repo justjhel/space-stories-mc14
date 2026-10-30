@@ -2107,9 +2107,24 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
             if (!CanSecreteOnTilePopup((owner, construction), node.StructureId, target, true, true, false, !queenQueue))
                 continue;
 
+            var hasBoost = _queenBoostQuery.HasComp(owner);
             var buildMult = GetBuildSpeed(node.StructureId) ?? 1f;
+            buildMult *= GetDesignNodeBuildTimeMultiplier(owner, target, node.StructureId);
+
+            if (hasBoost && _queenBoostQuery.TryComp(owner, out var boostComp))
+                buildMult *= boostComp.BuildSpeedMultiplier;
+
             var finalBuildTime = construction.BuildDelay * buildMult;
-            var doAfterEvent = new XenoSecreteStructureDoAfterEvent(GetNetCoordinates(target), node.StructureId);
+            var animationChoice = hasBoost ? GetResinUpgradeTarget(node.StructureId) : node.StructureId;
+            var effectId = XenoStructuresAnimation + animationChoice;
+            EntityUid? effect = null;
+            if (_net.IsServer && _prototype.HasIndex(effectId))
+            {
+                effect = Spawn(effectId, target);
+                RaiseNetworkEvent(new XenoConstructionAnimationStartEvent(GetNetEntity(effect.Value), GetNetEntity(owner), finalBuildTime), Filter.PvsExcept(effect.Value));
+            }
+
+            var doAfterEvent = new XenoSecreteStructureDoAfterEvent(GetNetCoordinates(target), node.StructureId, GetNetEntity(effect));
             var doAfter = new DoAfterArgs(EntityManager, owner, finalBuildTime, doAfterEvent, owner)
             {
                 BreakOnMove = true,
@@ -2117,11 +2132,17 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
                 CancelDuplicate = false,
             };
 
-            if (_doAfter.TryStartDoAfter(doAfter))
+            if (!_doAfter.TryStartDoAfter(doAfter))
             {
-                node.Building = true;
-                Dirty(nodeUid, node);
+                if (effect != null && _net.IsServer)
+                    QueueDel(effect);
+
+                continue;
             }
+
+            node.Building = true;
+            Dirty(nodeUid, node);
+            break;
         }
 
         var time = _timing.CurTime;
