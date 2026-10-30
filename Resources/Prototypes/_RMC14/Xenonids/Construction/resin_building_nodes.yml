@@ -14,14 +14,3 @@
   - type: Sprite
     visible: false
   - type: XenoResinBuildingNode
-
-- type: entity
-  id: XenoResinBuildingQueenQueueNode
-  parent: XenoResinBuildingNode
-  name: queued resin construction
-  description: A golden psychic mark in the Queen's construction queue.
-  components:
-  - type: Sprite
-    sprite: _RMC14/Structures/designer_nodes.rsi
-    state: wall_mark_construct
-    color: "#FFD700"
