@@ -579,8 +579,7 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
             }
 
             var queenQueue = HasComp<XenoAttachedOvipositorComponent>(xeno.Owner);
-            var nodePrototype = queenQueue ? "XenoResinBuildingQueenQueueNode" : "XenoResinBuildingNode";
-            var nodeUid = Spawn(nodePrototype, snappedTarget);
+            var nodeUid = Spawn("XenoResinBuildingNode", snappedTarget);
             if (TryComp(nodeUid, out XenoResinBuildingNodeComponent? node))
             {
                 node.Owner = xeno.Owner;
