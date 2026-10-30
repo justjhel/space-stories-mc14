@@ -598,6 +598,16 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
                          !_transform.InRange(_transform.GetMoverCoordinates(xeno.Owner), snappedTarget, rangeEv.Range.Float());
         var alreadyBuilding = IsXenoBuilding(xeno.Owner);
 
+        if (alreadyBuilding && !outOfRange)
+        {
+            var minRange = GetStructureMinRange(choice);
+            if (minRange.Float() > 0 &&
+                _transform.InRange(_transform.GetMoverCoordinates(xeno.Owner), snappedTarget, minRange.Float()))
+            {
+                return;
+            }
+        }
+
         if (!outOfRange && !alreadyBuilding &&
             existingNode is { Owner: var existingOwner } &&
             existingOwner == xeno.Owner)
