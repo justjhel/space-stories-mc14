@@ -152,7 +152,6 @@ public sealed class XenoConstructionGhostSystem : EntitySystem
         if (isMouseDown &&
             isConstructionActive &&
             !string.IsNullOrEmpty(buildChoice) &&
-            (!isBuilding || upgradeUnderMouse != null) &&
             TryComp(player.Value, out XenoConstructionComponent? construction) &&
             !construction.OrderConstructionTargeting)
         {
