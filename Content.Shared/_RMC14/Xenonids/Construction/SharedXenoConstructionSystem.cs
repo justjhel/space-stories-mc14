@@ -844,8 +844,10 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
                 {
                     QueueDel(nodeUid);
                 }
+            }
 
-                using var resinNodes = _rmcMap.GetAnchoredEntitiesEnumerator<XenoResinBuildingNodeComponent>(coordinates);
+            using (var resinNodes = _rmcMap.GetAnchoredEntitiesEnumerator<XenoResinBuildingNodeComponent>(coordinates))
+            {
                 while (resinNodes.MoveNext(out var nodeUid))
                 {
                     QueueDel(nodeUid);
