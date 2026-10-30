@@ -12,8 +12,7 @@
     bodyType: Static
     canCollide: false
   - type: Sprite
-    sprite: _RMC14/Structures/designer_nodes.rsi
-    state: wall_mark_construct
+    visible: false
   - type: XenoResinBuildingNode
 
 - type: entity
