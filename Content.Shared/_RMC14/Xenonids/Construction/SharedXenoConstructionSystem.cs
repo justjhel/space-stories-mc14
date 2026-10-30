@@ -558,7 +558,28 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
         }
 
         if (xeno.Comp.BuildChoice is not { } choice)
+        {
+            // An owned designation must remain cancellable even if the builder has no
+            // structure selected. Target validation deliberately allows this click.
+            using var ownedNodes = _rmcMap.GetAnchoredEntitiesEnumerator<XenoResinBuildingNodeComponent>(snapped);
+            while (ownedNodes.MoveNext(out var ownedNodeUid))
+            {
+                if (!TryComp(ownedNodeUid, out XenoResinBuildingNodeComponent? ownedNode) ||
+                    ownedNode.Owner != xeno.Owner)
+                {
+                    continue;
+                }
+
+                args.Handled = true;
+                if (_net.IsServer)
+                    QueueDel(ownedNodeUid);
+
+                _audio.PlayPredicted(xeno.Comp.BuildSound, snapped, xeno.Owner);
+                return;
+            }
+
             return;
+        }
 
         if (TryHandleDesignerRemoteDeleteNodeChoice(xeno, choice, args.Target))
         {
