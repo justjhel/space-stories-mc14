@@ -2023,64 +2023,55 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
 
     public override void Update(float frameTime)
     {
-        // A designation is completed by any eligible builder that reaches it. Queen queue
-        // designations remain private to their Queen and are processed in placement order.
+        // A designation is completed by its planter when it can build again.
+        // Queen queue designations are processed in placement order while the ovipositor is attached.
         var nodeQuery = EntityQueryEnumerator<XenoResinBuildingNodeComponent>();
         while (nodeQuery.MoveNext(out var nodeUid, out var node))
         {
             if (node.Building || EntityManager.IsQueuedForDeletion(nodeUid))
                 continue;
 
-            if (node.Owner is { } planter && TerminatingOrDeleted(planter))
+            if (node.Owner is not { } owner ||
+                TerminatingOrDeleted(owner) ||
+                !TryComp(owner, out XenoConstructionComponent? construction))
             {
-                node.Owner = null;
-                node.QueenQueue = false;
-                Dirty(nodeUid, node);
+                if (_net.IsServer)
+                    QueueDel(nodeUid);
+                continue;
             }
 
+            if (!construction.CanBuild.Contains(node.StructureId) || IsXenoBuilding(owner))
+                continue;
+
             var target = Transform(nodeUid).Coordinates;
-            var builders = EntityQueryEnumerator<XenoConstructionComponent, XenoComponent>();
-            while (builders.MoveNext(out var builderUid, out var construction, out _))
+            var queenQueue = node.QueenQueue && HasComp<XenoAttachedOvipositorComponent>(owner);
+            if (queenQueue && !IsOldestQueenQueueDesignation(owner, nodeUid))
+                continue;
+
+            if (queenQueue &&
+                _queenEye.IsInQueenEye(owner) &&
+                !_queenEye.CanSeeTarget(owner, target))
             {
-                if (!construction.CanBuild.Contains(node.StructureId) || IsXenoBuilding(builderUid))
-                    continue;
+                continue;
+            }
 
-                var queenQueue = node.QueenQueue &&
-                                 node.Owner == builderUid &&
-                                 HasComp<XenoAttachedOvipositorComponent>(builderUid);
+            if (!CanSecreteOnTilePopup((owner, construction), node.StructureId, target, true, true, false, !queenQueue))
+                continue;
 
-                if (node.QueenQueue && node.Owner != builderUid)
-                    continue;
+            var buildMult = GetBuildSpeed(node.StructureId) ?? 1f;
+            var finalBuildTime = construction.BuildDelay * buildMult;
+            var doAfterEvent = new XenoSecreteStructureDoAfterEvent(GetNetCoordinates(target), node.StructureId);
+            var doAfter = new DoAfterArgs(EntityManager, owner, finalBuildTime, doAfterEvent, owner)
+            {
+                BreakOnMove = true,
+                RootEntity = true,
+                CancelDuplicate = false,
+            };
 
-                if (queenQueue && !IsOldestQueenQueueDesignation(builderUid, nodeUid))
-                    continue;
-
-                if (queenQueue &&
-                    _queenEye.IsInQueenEye(builderUid) &&
-                    !_queenEye.CanSeeTarget(builderUid, target))
-                {
-                    continue;
-                }
-
-                if (!CanSecreteOnTilePopup((builderUid, construction), node.StructureId, target, true, true, false, !queenQueue))
-                    continue;
-
-                var buildMult = GetBuildSpeed(node.StructureId) ?? 1f;
-                var finalBuildTime = construction.BuildDelay * buildMult;
-                var doAfterEvent = new XenoSecreteStructureDoAfterEvent(GetNetCoordinates(target), node.StructureId);
-                var doAfter = new DoAfterArgs(EntityManager, builderUid, finalBuildTime, doAfterEvent, builderUid)
-                {
-                    BreakOnMove = true,
-                    RootEntity = true,
-                    CancelDuplicate = false,
-                };
-
-                if (_doAfter.TryStartDoAfter(doAfter))
-                {
-                    node.Building = true;
-                    Dirty(nodeUid, node);
-                    break;
-                }
+            if (_doAfter.TryStartDoAfter(doAfter))
+            {
+                node.Building = true;
+                Dirty(nodeUid, node);
             }
         }
 
