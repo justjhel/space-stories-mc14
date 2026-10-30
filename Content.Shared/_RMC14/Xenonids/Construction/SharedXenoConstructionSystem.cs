@@ -530,6 +530,52 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
             return;
         }
 
+        // Out-of-range resin placement becomes a persistent designation instead of failing.
+        // Keep the regular validation (weeds, terrain, blockers, hive permissions and structure limits),
+        // but skip only the range check while validating the designation.
+        var rangeEv = new XenoConstructionRangeEvent(xeno.Comp.BuildRange);
+        RaiseLocalEvent(xeno, ref rangeEv);
+        var snappedTarget = args.Target.SnapToGrid(EntityManager, _map);
+        var outOfRange = rangeEv.Range > 0 &&
+                         !_queenEye.IsInQueenEye(xeno.Owner) &&
+                         !_transform.InRange(_transform.GetMoverCoordinates(xeno.Owner), snappedTarget, rangeEv.Range.Float());
+
+        if (outOfRange)
+        {
+            if (!CanSecreteOnTilePopup(xeno, choice, snappedTarget, true, true, false, false))
+                return;
+
+            args.Handled = true;
+            if (_net.IsClient)
+                return;
+
+            using var existingNodes = _rmcMap.GetAnchoredEntitiesEnumerator<XenoResinBuildingNodeComponent>(snappedTarget);
+            while (existingNodes.MoveNext(out var existingUid))
+            {
+                if (!TryComp(existingUid, out XenoResinBuildingNodeComponent? existing))
+                    continue;
+
+                if (existing.Owner != xeno.Owner)
+                    continue;
+
+                QueueDel(existingUid);
+                _audio.PlayPredicted(xeno.Comp.BuildSound, snappedTarget, xeno.Owner);
+                return;
+            }
+
+            var nodeUid = Spawn("XenoResinBuildingNode", snappedTarget);
+            if (TryComp(nodeUid, out XenoResinBuildingNodeComponent? node))
+            {
+                node.Owner = xeno.Owner;
+                node.StructureId = choice;
+                node.QueenQueue = false;
+                Dirty(nodeUid, node);
+            }
+
+            _audio.PlayPredicted(xeno.Comp.BuildSound, snappedTarget, xeno.Owner);
+            return;
+        }
+
         if (!CanSecreteOnTilePopup(xeno, choice, args.Target, true, true))
             return;
 
@@ -1344,7 +1390,7 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
         return true;
     }
 
-    public bool CanSecreteOnTilePopup(Entity<XenoConstructionComponent> xeno, EntProtoId? buildChoice, EntityCoordinates target, bool checkStructureSelected, bool checkWeeds, bool popup = true)
+    public bool CanSecreteOnTilePopup(Entity<XenoConstructionComponent> xeno, EntProtoId? buildChoice, EntityCoordinates target, bool checkStructureSelected, bool checkWeeds, bool popup = true, bool checkRange = true)
     {
         if (HasComp<VehicleInteriorOccupantComponent>(xeno.Owner))
         {
@@ -1407,7 +1453,7 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
         var ev = new XenoConstructionRangeEvent(xeno.Comp.BuildRange);
         RaiseLocalEvent(xeno, ref ev);
 
-        if (ev.Range > 0 && !_queenEye.IsInQueenEye(xeno.Owner))
+        if (checkRange && ev.Range > 0 && !_queenEye.IsInQueenEye(xeno.Owner))
         {
             if (!InRangePopup(xeno, target, ev.Range.Float(), GetStructureMinRange(buildChoice).Float(), popup))
                 return false;
