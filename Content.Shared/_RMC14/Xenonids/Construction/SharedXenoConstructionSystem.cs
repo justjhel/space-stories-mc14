@@ -107,6 +107,7 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
     private EntityQuery<XenoEggComponent> _xenoEggQuery;
     private EntityQuery<XenoTunnelComponent> _xenoTunnelQuery;
     private EntityQuery<QueenBuildingBoostComponent> _queenBoostQuery;
+    private EntityQuery<XenoResinBuildingNodeComponent> _resinBuildingNodeQuery;
 
     private const string XenoStructuresAnimation = "RMCEffect";
     private const string XenoHiveCoreNodeId = "HiveCoreXenoConstructionNode";
@@ -131,6 +132,7 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
         _xenoEggQuery = GetEntityQuery<XenoEggComponent>();
         _xenoTunnelQuery = GetEntityQuery<XenoTunnelComponent>();
         _queenBoostQuery = GetEntityQuery<QueenBuildingBoostComponent>();
+        _resinBuildingNodeQuery = GetEntityQuery<XenoResinBuildingNodeComponent>();
 
         SubscribeLocalEvent<NewXenoEvolvedEvent>(OnNewXenoEvolved);
         SubscribeLocalEvent<XenoDevolvedEvent>(OnXenoDevolved);
@@ -640,10 +642,22 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
         if (_net.IsServer && args.Effect != null)
             QueueDel(GetEntity(args.Effect));
 
+        var coordinates = GetCoordinates(args.Coordinates);
+        using (var designatedNodes = _rmcMap.GetAnchoredEntitiesEnumerator<XenoResinBuildingNodeComponent>(coordinates))
+        {
+            while (designatedNodes.MoveNext(out var nodeUid))
+            {
+                if (!TryComp(nodeUid, out XenoResinBuildingNodeComponent? node))
+                    continue;
+
+                node.Building = false;
+                Dirty(nodeUid, node);
+            }
+        }
+
         if (args.Handled || args.Cancelled)
             return;
 
-        var coordinates = GetCoordinates(args.Coordinates);
         if (!coordinates.IsValid(EntityManager) ||
             !xeno.Comp.CanBuild.Contains(args.StructureId) ||
             !CanSecreteOnTilePopup(xeno, args.StructureId, GetCoordinates(args.Coordinates), true, true))
@@ -741,6 +755,12 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
             {
                 using var anchoredNodes = _rmcMap.GetAnchoredEntitiesEnumerator<DesignNodeComponent>(coordinates);
                 while (anchoredNodes.MoveNext(out var nodeUid))
+                {
+                    QueueDel(nodeUid);
+                }
+
+                using var resinNodes = _rmcMap.GetAnchoredEntitiesEnumerator<XenoResinBuildingNodeComponent>(coordinates);
+                while (resinNodes.MoveNext(out var nodeUid))
                 {
                     QueueDel(nodeUid);
                 }
@@ -1953,6 +1973,47 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
 
     public override void Update(float frameTime)
     {
+        // Resin designations are processed only when their planter is able to build them.
+        // This keeps the normal construction validation, plasma cost and do-after path in use.
+        var nodeQuery = EntityQueryEnumerator<XenoResinBuildingNodeComponent, TransformComponent>();
+        while (nodeQuery.MoveNext(out var nodeUid, out var node, out var nodeXform))
+        {
+            if (node.Building)
+                continue;
+
+            if (node.Owner is not { } owner ||
+                TerminatingOrDeleted(owner) ||
+                !TryComp(owner, out XenoConstructionComponent? construction))
+            {
+                if (_net.IsServer)
+                    QueueDel(nodeUid);
+                continue;
+            }
+
+            if (!construction.CanBuild.Contains(node.StructureId))
+                continue;
+
+            var target = _transform.GetCoordinates(nodeUid);
+            if (!CanSecreteOnTilePopup((owner, construction), node.StructureId, target, true, true, false))
+                continue;
+
+            var buildMult = GetBuildSpeed(node.StructureId) ?? 1f;
+            var finalBuildTime = construction.BuildDelay * buildMult;
+            var doAfterEvent = new XenoSecreteStructureDoAfterEvent(GetNetCoordinates(target), node.StructureId);
+            var doAfter = new DoAfterArgs(EntityManager, owner, finalBuildTime, doAfterEvent, owner)
+            {
+                BreakOnMove = true,
+                RootEntity = true,
+                CancelDuplicate = false,
+            };
+
+            if (_doAfter.TryStartDoAfter(doAfter))
+            {
+                node.Building = true;
+                Dirty(nodeUid, node);
+            }
+        }
+
         var time = _timing.CurTime;
         var query = EntityQueryEnumerator<XenoRecentlyConstructedComponent>();
         while (query.MoveNext(out var uid, out var comp))
