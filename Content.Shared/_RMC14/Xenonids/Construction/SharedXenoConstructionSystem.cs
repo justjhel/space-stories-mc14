@@ -465,6 +465,48 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
         };
     }
 
+    public bool HasOwnResinDesignation(EntityUid owner, EntityCoordinates target)
+    {
+        var snapped = target.SnapToGrid(EntityManager, _map);
+        using var nodes = _rmcMap.GetAnchoredEntitiesEnumerator<XenoResinBuildingNodeComponent>(snapped);
+        while (nodes.MoveNext(out var nodeUid))
+        {
+            if (TryComp(nodeUid, out XenoResinBuildingNodeComponent? node) && node.Owner == owner)
+                return true;
+        }
+
+        return false;
+    }
+
+    private bool IsXenoBuilding(EntityUid xeno)
+    {
+        if (!TryComp(xeno, out DoAfterComponent? doAfter))
+            return false;
+
+        return doAfter.DoAfters.Values.Any(activeDoAfter =>
+            activeDoAfter.Args.Event is XenoSecreteStructureDoAfterEvent or XenoOrderConstructionDoAfterEvent);
+    }
+
+    private bool IsOldestQueenQueueDesignation(EntityUid owner, EntityUid currentNode)
+    {
+        EntityUid? oldestNode = null;
+        var oldestOrder = int.MaxValue;
+        var query = EntityQueryEnumerator<XenoResinBuildingNodeComponent>();
+        while (query.MoveNext(out var nodeUid, out var node))
+        {
+            if (node.Owner != owner || !node.QueenQueue || EntityManager.IsQueuedForDeletion(nodeUid))
+                continue;
+
+            if (node.PlacedOrder >= oldestOrder)
+                continue;
+
+            oldestOrder = node.PlacedOrder;
+            oldestNode = nodeUid;
+        }
+
+        return oldestNode == currentNode;
+    }
+
     private void HandleSecreteResinPlacement(Entity<XenoConstructionComponent> xeno, ref XenoSecreteStructureActionEvent args)
     {
         var snapped = args.Target.SnapToGrid(EntityManager, _map);
@@ -516,7 +558,28 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
         }
 
         if (xeno.Comp.BuildChoice is not { } choice)
+        {
+            // An owned designation must remain cancellable even if the builder has no
+            // structure selected. Target validation deliberately allows this click.
+            using var ownedNodes = _rmcMap.GetAnchoredEntitiesEnumerator<XenoResinBuildingNodeComponent>(snapped);
+            while (ownedNodes.MoveNext(out var ownedNodeUid))
+            {
+                if (!TryComp(ownedNodeUid, out XenoResinBuildingNodeComponent? ownedNode) ||
+                    ownedNode.Owner != xeno.Owner)
+                {
+                    continue;
+                }
+
+                args.Handled = true;
+                if (_net.IsServer)
+                    QueueDel(ownedNodeUid);
+
+                _audio.PlayPredicted(xeno.Comp.BuildSound, snapped, xeno.Owner);
+                return;
+            }
+
             return;
+        }
 
         if (TryHandleDesignerRemoteDeleteNodeChoice(xeno, choice, args.Target))
         {
@@ -527,6 +590,115 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
         if (TryHandleDesignerRemoteThickenResin(xeno, choice, args.Target))
         {
             args.Handled = true;
+            return;
+        }
+
+        // Out-of-range resin placement becomes a persistent designation instead of failing.
+        // Keep the regular validation (weeds, terrain, blockers, hive permissions and structure limits),
+        // but skip only the range check while validating the designation.
+        var snappedTarget = args.Target.SnapToGrid(EntityManager, _map);
+        EntityUid? existingNodeUid = null;
+        XenoResinBuildingNodeComponent? existingNode = null;
+        using (var nodes = _rmcMap.GetAnchoredEntitiesEnumerator<XenoResinBuildingNodeComponent>(snappedTarget))
+        {
+            while (nodes.MoveNext(out var nodeUid))
+            {
+                if (!TryComp(nodeUid, out existingNode))
+                    continue;
+
+                existingNodeUid = nodeUid;
+                break;
+            }
+        }
+
+        // Queens with an attached ovipositor can remove their queued marks by targeting them again.
+        if (existingNodeUid is { } queuedNodeUid &&
+            existingNode is { QueenQueue: true, Owner: var queueOwner } &&
+            queueOwner == xeno.Owner &&
+            HasComp<XenoAttachedOvipositorComponent>(xeno.Owner))
+        {
+            args.Handled = true;
+            if (_net.IsServer)
+                QueueDel(queuedNodeUid);
+
+            _audio.PlayPredicted(xeno.Comp.BuildSound, snappedTarget, xeno.Owner);
+            return;
+        }
+
+        var rangeEv = new XenoConstructionRangeEvent(xeno.Comp.BuildRange);
+        RaiseLocalEvent(xeno, ref rangeEv);
+        var outOfRange = rangeEv.Range > 0 &&
+                         !_queenEye.IsInQueenEye(xeno.Owner) &&
+                         !_transform.InRange(_transform.GetMoverCoordinates(xeno.Owner), snappedTarget, rangeEv.Range.Float());
+        var alreadyBuilding = IsXenoBuilding(xeno.Owner);
+
+        if (alreadyBuilding && !outOfRange)
+        {
+            var minRange = GetStructureMinRange(choice);
+            if (minRange.Float() > 0 &&
+                _transform.InRange(_transform.GetMoverCoordinates(xeno.Owner), snappedTarget, minRange.Float()))
+            {
+                return;
+            }
+        }
+
+        if (!outOfRange && !alreadyBuilding &&
+            existingNode is { Owner: var existingOwner } &&
+            existingOwner == xeno.Owner)
+        {
+            // When a planter reaches its own mark, build the structure type stored on that mark,
+            // not whichever resin type happens to be selected now.
+            choice = existingNode.StructureId;
+        }
+        else if (!outOfRange && !alreadyBuilding &&
+                 existingNodeUid != null &&
+                 existingNode?.Owner != xeno.Owner)
+        {
+            // Do not let a direct build consume another builder's private designation.
+            args.Handled = true;
+            _popup.PopupClient(Loc.GetString("rmc-xeno-construction-blocked-structure"), snappedTarget, xeno, PopupType.SmallCaution);
+            return;
+        }
+
+        if (outOfRange || alreadyBuilding)
+        {
+            // Re-targeting one of our marks cancels it even if the tile has since become blocked.
+            if (existingNodeUid is { } existingUid && existingNode?.Owner == xeno.Owner)
+            {
+                args.Handled = true;
+                if (_net.IsServer)
+                    QueueDel(existingUid);
+
+                _audio.PlayPredicted(xeno.Comp.BuildSound, snappedTarget, xeno.Owner);
+                return;
+            }
+
+            if (!CanSecreteOnTilePopup(xeno, choice, snappedTarget, true, true, false, false, checkSupport: false))
+                return;
+
+            args.Handled = true;
+            if (_net.IsClient)
+                return;
+
+            if (existingNodeUid != null)
+            {
+                _popup.PopupClient(Loc.GetString("rmc-xeno-construction-blocked-structure"), snappedTarget, xeno, PopupType.SmallCaution);
+                return;
+            }
+
+            var queenQueue = HasComp<XenoAttachedOvipositorComponent>(xeno.Owner);
+            var nodeUid = Spawn("XenoResinBuildingNode", snappedTarget);
+            if (TryComp(nodeUid, out XenoResinBuildingNodeComponent? node))
+            {
+                node.Owner = xeno.Owner;
+                node.StructureId = choice;
+                node.QueenQueue = queenQueue;
+                node.PlacedOrder = xeno.Comp.NextResinDesignationOrder++;
+                Dirty(xeno);
+                Dirty(nodeUid, node);
+            }
+
+            _audio.PlayPredicted(xeno.Comp.BuildSound, snappedTarget, xeno.Owner);
             return;
         }
 
@@ -594,16 +766,43 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
         if (_net.IsServer && args.Effect != null)
             QueueDel(GetEntity(args.Effect));
 
-        if (args.Handled || args.Cancelled)
+        var coordinates = GetCoordinates(args.Coordinates);
+        if (!coordinates.IsValid(EntityManager))
             return;
 
-        var coordinates = GetCoordinates(args.Coordinates);
-        if (!coordinates.IsValid(EntityManager) ||
-            !xeno.Comp.CanBuild.Contains(args.StructureId) ||
-            !CanSecreteOnTilePopup(xeno, args.StructureId, GetCoordinates(args.Coordinates), true, true))
+        using (var designatedNodes = _rmcMap.GetAnchoredEntitiesEnumerator<XenoResinBuildingNodeComponent>(coordinates))
         {
-            return;
+            while (designatedNodes.MoveNext(out var nodeUid))
+            {
+                if (!TryComp(nodeUid, out XenoResinBuildingNodeComponent? node))
+                    continue;
+
+                node.Building = false;
+                Dirty(nodeUid, node);
+            }
         }
+
+        if (args.Handled || args.Cancelled || !xeno.Comp.CanBuild.Contains(args.StructureId))
+            return;
+
+        var queenQueueDesignation = false;
+        using (var designatedNodes = _rmcMap.GetAnchoredEntitiesEnumerator<XenoResinBuildingNodeComponent>(coordinates))
+        {
+            while (designatedNodes.MoveNext(out var nodeUid))
+            {
+                if (TryComp(nodeUid, out XenoResinBuildingNodeComponent? node) &&
+                    node.Owner == xeno.Owner &&
+                    node.QueenQueue &&
+                    HasComp<XenoAttachedOvipositorComponent>(xeno.Owner))
+                {
+                    queenQueueDesignation = true;
+                    break;
+                }
+            }
+        }
+
+        if (!CanSecreteOnTilePopup(xeno, args.StructureId, coordinates, true, true, true, !queenQueueDesignation))
+            return;
 
         var hasBoost = _queenBoostQuery.HasComp(xeno.Owner);
         if (_area.TryGetArea(GetCoordinates(args.Coordinates), out var area, out _) &&
@@ -695,6 +894,14 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
             {
                 using var anchoredNodes = _rmcMap.GetAnchoredEntitiesEnumerator<DesignNodeComponent>(coordinates);
                 while (anchoredNodes.MoveNext(out var nodeUid))
+                {
+                    QueueDel(nodeUid);
+                }
+            }
+
+            using (var resinNodes = _rmcMap.GetAnchoredEntitiesEnumerator<XenoResinBuildingNodeComponent>(coordinates))
+            {
+                while (resinNodes.MoveNext(out var nodeUid))
                 {
                     QueueDel(nodeUid);
                 }
@@ -954,6 +1161,9 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
 
         var snapped = target.SnapToGrid(EntityManager, _map);
 
+        if (HasOwnResinDesignation(args.User, snapped))
+            return;
+
         var adjustEv = new XenoSecreteStructureAdjustFields(snapped);
         RaiseLocalEvent(args.User, ref adjustEv);
 
@@ -1000,7 +1210,8 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
             return;
         }
 
-        if (!CanSecreteOnTilePopup((args.User, construction), construction.BuildChoice, target, ent.Comp.CheckStructureSelected, ent.Comp.CheckWeeds, false))
+        if (!CanSecreteOnTilePopup((args.User, construction), construction.BuildChoice, target, ent.Comp.CheckStructureSelected, ent.Comp.CheckWeeds, false) &&
+            !CanSecreteOnTilePopup((args.User, construction), construction.BuildChoice, target, ent.Comp.CheckStructureSelected, ent.Comp.CheckWeeds, false, false))
         {
             args.Invalid = true;
         }
@@ -1344,7 +1555,7 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
         return true;
     }
 
-    public bool CanSecreteOnTilePopup(Entity<XenoConstructionComponent> xeno, EntProtoId? buildChoice, EntityCoordinates target, bool checkStructureSelected, bool checkWeeds, bool popup = true)
+    public bool CanSecreteOnTilePopup(Entity<XenoConstructionComponent> xeno, EntProtoId? buildChoice, EntityCoordinates target, bool checkStructureSelected, bool checkWeeds, bool popup = true, bool checkRange = true, bool checkSupport = true)
     {
         if (HasComp<VehicleInteriorOccupantComponent>(xeno.Owner))
         {
@@ -1407,7 +1618,7 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
         var ev = new XenoConstructionRangeEvent(xeno.Comp.BuildRange);
         RaiseLocalEvent(xeno, ref ev);
 
-        if (ev.Range > 0 && !_queenEye.IsInQueenEye(xeno.Owner))
+        if (checkRange && ev.Range > 0 && !_queenEye.IsInQueenEye(xeno.Owner))
         {
             if (!InRangePopup(xeno, target, ev.Range.Float(), GetStructureMinRange(buildChoice).Float(), popup))
                 return false;
@@ -1473,7 +1684,8 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
         if (checkStructureSelected &&
             buildChoice is { } choice)
         {
-            if (_prototype.TryIndex(choice, out var choiceProto) &&
+            if (checkSupport &&
+                _prototype.TryIndex(choice, out var choiceProto) &&
                 choiceProto.HasComponent<XenoConstructionRequiresSupportComponent>(_compFactory))
             {
                 if (!IsSupported((gridId, grid), target))
@@ -1907,6 +2119,79 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
 
     public override void Update(float frameTime)
     {
+        // A designation is completed by its planter when it can build again.
+        // Queen queue designations are processed in placement order while the ovipositor is attached.
+        var nodeQuery = EntityQueryEnumerator<XenoResinBuildingNodeComponent>();
+        while (nodeQuery.MoveNext(out var nodeUid, out var node))
+        {
+            if (node.Building || EntityManager.IsQueuedForDeletion(nodeUid))
+                continue;
+
+            if (node.Owner is not { } owner ||
+                TerminatingOrDeleted(owner) ||
+                !TryComp(owner, out XenoConstructionComponent? construction))
+            {
+                if (_net.IsServer)
+                    QueueDel(nodeUid);
+                continue;
+            }
+
+            if (!construction.CanBuild.Contains(node.StructureId) || IsXenoBuilding(owner))
+                continue;
+
+            var target = Transform(nodeUid).Coordinates;
+            var queenQueue = node.QueenQueue && HasComp<XenoAttachedOvipositorComponent>(owner);
+            if (queenQueue && !IsOldestQueenQueueDesignation(owner, nodeUid))
+                continue;
+
+            if (queenQueue &&
+                _queenEye.IsInQueenEye(owner) &&
+                !_queenEye.CanSeeTarget(owner, target))
+            {
+                continue;
+            }
+
+            if (!CanSecreteOnTilePopup((owner, construction), node.StructureId, target, true, true, false, !queenQueue))
+                continue;
+
+            var hasBoost = _queenBoostQuery.HasComp(owner);
+            var buildMult = GetBuildSpeed(node.StructureId) ?? 1f;
+            buildMult *= GetDesignNodeBuildTimeMultiplier(owner, target, node.StructureId);
+
+            if (hasBoost && _queenBoostQuery.TryComp(owner, out var boostComp))
+                buildMult *= boostComp.BuildSpeedMultiplier;
+
+            var finalBuildTime = construction.BuildDelay * buildMult;
+            var animationChoice = hasBoost ? GetResinUpgradeTarget(node.StructureId) : node.StructureId;
+            var effectId = XenoStructuresAnimation + animationChoice;
+            EntityUid? effect = null;
+            if (_net.IsServer && _prototype.HasIndex(effectId))
+            {
+                effect = Spawn(effectId, target);
+                RaiseNetworkEvent(new XenoConstructionAnimationStartEvent(GetNetEntity(effect.Value), GetNetEntity(owner), finalBuildTime), Filter.PvsExcept(effect.Value));
+            }
+
+            var doAfterEvent = new XenoSecreteStructureDoAfterEvent(GetNetCoordinates(target), node.StructureId, GetNetEntity(effect));
+            var doAfter = new DoAfterArgs(EntityManager, owner, finalBuildTime, doAfterEvent, owner)
+            {
+                BreakOnMove = true,
+                RootEntity = true,
+                CancelDuplicate = false,
+            };
+
+            if (!_doAfter.TryStartDoAfter(doAfter))
+            {
+                if (effect != null && _net.IsServer)
+                    QueueDel(effect);
+
+                continue;
+            }
+
+            node.Building = true;
+            Dirty(nodeUid, node);
+            break;
+        }
+
         var time = _timing.CurTime;
         var query = EntityQueryEnumerator<XenoRecentlyConstructedComponent>();
         while (query.MoveNext(out var uid, out var comp))

@@ -43,6 +43,9 @@ public sealed partial class XenoConstructionComponent : Component
     public EntityCoordinates? OrderingConstructionAt;
 
     [DataField, AutoNetworkedField]
+    public int NextResinDesignationOrder;
+
+    [DataField, AutoNetworkedField]
     public TimeSpan OrderConstructionDelay = TimeSpan.FromSeconds(3);
 
     [DataField, AutoNetworkedField]

@@ -151,8 +151,6 @@ public sealed class XenoConstructionGhostSystem : EntitySystem
 
         if (isMouseDown &&
             isConstructionActive &&
-            !string.IsNullOrEmpty(buildChoice) &&
-            (!isBuilding || upgradeUnderMouse != null) &&
             TryComp(player.Value, out XenoConstructionComponent? construction) &&
             !construction.OrderConstructionTargeting)
         {
@@ -220,11 +218,19 @@ public sealed class XenoConstructionGhostSystem : EntitySystem
         }
         else
         {
-            if (construction.BuildChoice == null)
+            // Owned marks remain targetable even if no structure is selected or the tile has become
+            // blocked, so they can always be cancelled. Other clicks require a selected structure.
+            var hasOwnDesignation = _xenoConstruction.HasOwnResinDesignation(player, coords);
+            if (construction.BuildChoice == null && !hasOwnDesignation)
                 return;
 
-            if (!_xenoConstruction.CanSecreteOnTilePopup((player, construction), construction.BuildChoice, coords, true, true, false))
+            // Otherwise allow the server to turn an otherwise valid out-of-range click into a designation.
+            if (!hasOwnDesignation &&
+                !_xenoConstruction.CanSecreteOnTilePopup((player, construction), construction.BuildChoice, coords, true, true, false) &&
+                !_xenoConstruction.CanSecreteOnTilePopup((player, construction), construction.BuildChoice, coords, true, true, false, false, checkSupport: false))
+            {
                 return;
+            }
         }
 
         var actionController = _uiManager.GetUIController<ActionUIController>();
@@ -460,7 +466,21 @@ public sealed class XenoConstructionGhostSystem : EntitySystem
 
             if (construction.BuildChoice != null)
             {
-                return _xenoConstruction.CanSecreteOnTilePopup((player, construction), construction.BuildChoice, coords, true, true, false);
+                if (_xenoConstruction.HasOwnResinDesignation(player, coords))
+                    return true;
+
+                if (_xenoConstruction.CanSecreteOnTilePopup((player, construction), construction.BuildChoice, coords, true, true, false))
+                    return true;
+
+                var rangeEv = new XenoConstructionRangeEvent(construction.BuildRange);
+                RaiseLocalEvent(player, ref rangeEv);
+                var snapped = coords.SnapToGrid(EntityManager, _mapManager);
+                var outOfRange = rangeEv.Range > 0 &&
+                                 !_queenEye.IsInQueenEye(player) &&
+                                 !_transform.InRange(_transform.GetMoverCoordinates(player), snapped, rangeEv.Range.Float());
+
+                return outOfRange &&
+                       _xenoConstruction.CanSecreteOnTilePopup((player, construction), construction.BuildChoice, coords, true, true, false, false);
             }
 
             return false;
