@@ -1,0 +1,16 @@
+- type: entity
+  id: XenoResinBuildingNode
+  parent: DesignNodeMarkBase
+  name: resin building designation
+  description: A psychic mark reserving a location for future resin construction.
+  categories: [ HideSpawnMenu, DoNotMap ]
+  save: false
+  components:
+  - type: Transform
+    anchored: true
+  - type: Physics
+    bodyType: Static
+    canCollide: false
+  - type: Sprite
+    visible: false
+  - type: XenoResinBuildingNode
