@@ -658,6 +658,9 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
             QueueDel(GetEntity(args.Effect));
 
         var coordinates = GetCoordinates(args.Coordinates);
+        if (!coordinates.IsValid(EntityManager))
+            return;
+
         using (var designatedNodes = _rmcMap.GetAnchoredEntitiesEnumerator<XenoResinBuildingNodeComponent>(coordinates))
         {
             while (designatedNodes.MoveNext(out var nodeUid))
@@ -670,7 +673,7 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
             }
         }
 
-        if (args.Handled || args.Cancelled)
+        if (args.Handled || args.Cancelled || !xeno.Comp.CanBuild.Contains(args.StructureId))
             return;
 
         var queenQueueDesignation = false;
@@ -689,12 +692,8 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
             }
         }
 
-        if (!coordinates.IsValid(EntityManager) ||
-            !xeno.Comp.CanBuild.Contains(args.StructureId) ||
-            !CanSecreteOnTilePopup(xeno, args.StructureId, coordinates, true, true, true, !queenQueueDesignation))
-        {
+        if (!CanSecreteOnTilePopup(xeno, args.StructureId, coordinates, true, true, true, !queenQueueDesignation))
             return;
-        }
 
         var hasBoost = _queenBoostQuery.HasComp(xeno.Owner);
         if (_area.TryGetArea(GetCoordinates(args.Coordinates), out var area, out _) &&
