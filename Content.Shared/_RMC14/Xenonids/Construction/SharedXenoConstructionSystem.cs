@@ -107,7 +107,6 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
     private EntityQuery<XenoEggComponent> _xenoEggQuery;
     private EntityQuery<XenoTunnelComponent> _xenoTunnelQuery;
     private EntityQuery<QueenBuildingBoostComponent> _queenBoostQuery;
-    private EntityQuery<XenoResinBuildingNodeComponent> _resinBuildingNodeQuery;
 
     private const string XenoStructuresAnimation = "RMCEffect";
     private const string XenoHiveCoreNodeId = "HiveCoreXenoConstructionNode";
@@ -132,7 +131,6 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
         _xenoEggQuery = GetEntityQuery<XenoEggComponent>();
         _xenoTunnelQuery = GetEntityQuery<XenoTunnelComponent>();
         _queenBoostQuery = GetEntityQuery<QueenBuildingBoostComponent>();
-        _resinBuildingNodeQuery = GetEntityQuery<XenoResinBuildingNodeComponent>();
 
         SubscribeLocalEvent<NewXenoEvolvedEvent>(OnNewXenoEvolved);
         SubscribeLocalEvent<XenoDevolvedEvent>(OnXenoDevolved);
@@ -476,6 +474,26 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
             activeDoAfter.Args.Event is XenoSecreteStructureDoAfterEvent or XenoOrderConstructionDoAfterEvent);
     }
 
+    private bool IsOldestQueenQueueDesignation(EntityUid owner, EntityUid currentNode)
+    {
+        EntityUid? oldestNode = null;
+        var oldestOrder = int.MaxValue;
+        var query = EntityQueryEnumerator<XenoResinBuildingNodeComponent>();
+        while (query.MoveNext(out var nodeUid, out var node))
+        {
+            if (node.Owner != owner || !node.QueenQueue || EntityManager.IsQueuedForDeletion(nodeUid))
+                continue;
+
+            if (node.PlacedOrder >= oldestOrder)
+                continue;
+
+            oldestOrder = node.PlacedOrder;
+            oldestNode = nodeUid;
+        }
+
+        return oldestNode == currentNode;
+    }
+
     private void HandleSecreteResinPlacement(Entity<XenoConstructionComponent> xeno, ref XenoSecreteStructureActionEvent args)
     {
         var snapped = args.Target.SnapToGrid(EntityManager, _map);
@@ -585,6 +603,8 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
                 node.Owner = xeno.Owner;
                 node.StructureId = choice;
                 node.QueenQueue = queenQueue;
+                node.PlacedOrder = xeno.Comp.NextResinDesignationOrder++;
+                Dirty(xeno);
                 Dirty(nodeUid, node);
             }
 
@@ -2024,6 +2044,9 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
 
             var target = Transform(nodeUid).Coordinates;
             var queenQueue = node.QueenQueue && HasComp<XenoAttachedOvipositorComponent>(owner);
+            if (queenQueue && !IsOldestQueenQueueDesignation(owner, nodeUid))
+                continue;
+
             if (queenQueue &&
                 _queenEye.IsInQueenEye(owner) &&
                 !_queenEye.CanSeeTarget(owner, target))
