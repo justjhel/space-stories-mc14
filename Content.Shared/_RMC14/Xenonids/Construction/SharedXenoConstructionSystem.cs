@@ -465,6 +465,19 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
         };
     }
 
+    public bool HasOwnResinDesignation(EntityUid owner, EntityCoordinates target)
+    {
+        var snapped = target.SnapToGrid(EntityManager, _map);
+        using var nodes = _rmcMap.GetAnchoredEntitiesEnumerator<XenoResinBuildingNodeComponent>(snapped);
+        while (nodes.MoveNext(out var nodeUid))
+        {
+            if (TryComp(nodeUid, out XenoResinBuildingNodeComponent? node) && node.Owner == owner)
+                return true;
+        }
+
+        return false;
+    }
+
     private bool IsXenoBuilding(EntityUid xeno)
     {
         if (!TryComp(xeno, out DoAfterComponent? doAfter))
@@ -1117,6 +1130,9 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
             return;
 
         var snapped = target.SnapToGrid(EntityManager, _map);
+
+        if (HasOwnResinDesignation(args.User, snapped))
+            return;
 
         var adjustEv = new XenoSecreteStructureAdjustFields(snapped);
         RaiseLocalEvent(args.User, ref adjustEv);
