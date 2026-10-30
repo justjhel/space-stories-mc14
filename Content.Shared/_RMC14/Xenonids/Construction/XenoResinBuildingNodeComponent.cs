@@ -18,4 +18,7 @@ public sealed partial class XenoResinBuildingNodeComponent : Component
 
     [DataField, AutoNetworkedField]
     public bool QueenQueue;
+
+    [DataField, AutoNetworkedField]
+    public bool Building;
 }
