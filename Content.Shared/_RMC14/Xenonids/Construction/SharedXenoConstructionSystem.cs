@@ -650,7 +650,6 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
             // not whichever resin type happens to be selected now.
             choice = existingNode.StructureId;
         }
-
         else if (!outOfRange && !alreadyBuilding &&
                  existingNodeUid != null &&
                  existingNode?.Owner != xeno.Owner)
