@@ -562,13 +562,50 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
         // Out-of-range resin placement becomes a persistent designation instead of failing.
         // Keep the regular validation (weeds, terrain, blockers, hive permissions and structure limits),
         // but skip only the range check while validating the designation.
+        var snappedTarget = args.Target.SnapToGrid(EntityManager, _map);
+        EntityUid? existingNodeUid = null;
+        XenoResinBuildingNodeComponent? existingNode = null;
+        using (var nodes = _rmcMap.GetAnchoredEntitiesEnumerator<XenoResinBuildingNodeComponent>(snappedTarget))
+        {
+            while (nodes.MoveNext(out var nodeUid))
+            {
+                if (!TryComp(nodeUid, out existingNode))
+                    continue;
+
+                existingNodeUid = nodeUid;
+                break;
+            }
+        }
+
+        // Queens with an attached ovipositor can remove their queued marks by targeting them again.
+        if (existingNodeUid is { } queuedNodeUid &&
+            existingNode is { QueenQueue: true, Owner: var queueOwner } &&
+            queueOwner == xeno.Owner &&
+            HasComp<XenoAttachedOvipositorComponent>(xeno.Owner))
+        {
+            args.Handled = true;
+            if (_net.IsServer)
+                QueueDel(queuedNodeUid);
+
+            _audio.PlayPredicted(xeno.Comp.BuildSound, snappedTarget, xeno.Owner);
+            return;
+        }
+
         var rangeEv = new XenoConstructionRangeEvent(xeno.Comp.BuildRange);
         RaiseLocalEvent(xeno, ref rangeEv);
-        var snappedTarget = args.Target.SnapToGrid(EntityManager, _map);
         var outOfRange = rangeEv.Range > 0 &&
                          !_queenEye.IsInQueenEye(xeno.Owner) &&
                          !_transform.InRange(_transform.GetMoverCoordinates(xeno.Owner), snappedTarget, rangeEv.Range.Float());
         var alreadyBuilding = IsXenoBuilding(xeno.Owner);
+
+        if (!outOfRange && !alreadyBuilding &&
+            existingNode is { Owner: var existingOwner } &&
+            existingOwner == xeno.Owner)
+        {
+            // When a planter reaches its own mark, build the structure type stored on that mark,
+            // not whichever resin type happens to be selected now.
+            choice = existingNode.StructureId;
+        }
 
         if (outOfRange || alreadyBuilding)
         {
