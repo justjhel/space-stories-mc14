@@ -222,9 +222,10 @@ public sealed class XenoConstructionGhostSystem : EntitySystem
             if (construction.BuildChoice == null)
                 return;
 
-            // Allow the server to turn an otherwise valid out-of-range click into a designation.
-            // The server still decides whether to build directly, place a mark, or reject the target.
-            if (!_xenoConstruction.CanSecreteOnTilePopup((player, construction), construction.BuildChoice, coords, true, true, false) &&
+            // Owned marks remain targetable even if the tile has become blocked, so they can be cancelled.
+            // Otherwise allow the server to turn an otherwise valid out-of-range click into a designation.
+            if (!_xenoConstruction.HasOwnResinDesignation(player, coords) &&
+                !_xenoConstruction.CanSecreteOnTilePopup((player, construction), construction.BuildChoice, coords, true, true, false) &&
                 !_xenoConstruction.CanSecreteOnTilePopup((player, construction), construction.BuildChoice, coords, true, true, false, false))
             {
                 return;
@@ -464,6 +465,9 @@ public sealed class XenoConstructionGhostSystem : EntitySystem
 
             if (construction.BuildChoice != null)
             {
+                if (_xenoConstruction.HasOwnResinDesignation(player, coords))
+                    return true;
+
                 if (_xenoConstruction.CanSecreteOnTilePopup((player, construction), construction.BuildChoice, coords, true, true, false))
                     return true;
 
