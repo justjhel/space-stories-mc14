@@ -609,6 +609,17 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
 
         if (outOfRange || alreadyBuilding)
         {
+            // Re-targeting one of our marks cancels it even if the tile has since become blocked.
+            if (existingNodeUid is { } existingUid && existingNode?.Owner == xeno.Owner)
+            {
+                args.Handled = true;
+                if (_net.IsServer)
+                    QueueDel(existingUid);
+
+                _audio.PlayPredicted(xeno.Comp.BuildSound, snappedTarget, xeno.Owner);
+                return;
+            }
+
             if (!CanSecreteOnTilePopup(xeno, choice, snappedTarget, true, true, false, false))
                 return;
 
@@ -616,20 +627,9 @@ public sealed class SharedXenoConstructionSystem : EntitySystem
             if (_net.IsClient)
                 return;
 
-            using var existingNodes = _rmcMap.GetAnchoredEntitiesEnumerator<XenoResinBuildingNodeComponent>(snappedTarget);
-            while (existingNodes.MoveNext(out var existingUid))
+            if (existingNodeUid != null)
             {
-                if (!TryComp(existingUid, out XenoResinBuildingNodeComponent? existing))
-                    continue;
-
-                if (existing.Owner != xeno.Owner)
-                {
-                    _popup.PopupClient(Loc.GetString("rmc-xeno-construction-blocked-structure"), snappedTarget, xeno, PopupType.SmallCaution);
-                    return;
-                }
-
-                QueueDel(existingUid);
-                _audio.PlayPredicted(xeno.Comp.BuildSound, snappedTarget, xeno.Owner);
+                _popup.PopupClient(Loc.GetString("rmc-xeno-construction-blocked-structure"), snappedTarget, xeno, PopupType.SmallCaution);
                 return;
             }
 
